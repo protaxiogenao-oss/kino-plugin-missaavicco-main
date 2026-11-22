@@ -1,4 +1,4 @@
-// Kino plugin: MissAV — v1.5.0 (HLS proxy for Android TV 403 + CloudStream paths)
+// Kino plugin: MissAV — v1.5.2 (proxy + Cookie ck= for surrit CF)
 // apiVersion 6. Mirrors configurable. Optional Cloudflare Worker proxy (CineJoy-style).
 
 function log(...args) {
@@ -41,18 +41,27 @@ function hlsProxyBase() {
   }
 }
 
+function extractCookie(headers) {
+  if (!headers || typeof headers !== "object") return "";
+  const c = headers.Cookie || headers.cookie || "";
+  return String(c || "").trim();
+}
+
 /**
- * Wrap a direct CDN HLS URL through the worker so ExoPlayer (Android TV)
- * never hits surrit/sixyik without Referer/Origin. Same shape as CineJoy worker:
- *   {worker}/playlist.m3u8?url={encoded}&ref={page}&orig={origin}
+ * Wrap CDN HLS through the worker. Passes ref/orig and Cookie (ck=) so surrit
+ * accepts the request. ExoPlayer on Android TV often drops Cookie headers;
+ * embedding them in the proxy URL fixes that.
  */
-function maybeProxyUrl(directUrl, pageUrl) {
+function maybeProxyUrl(directUrl, pageUrl, cookie) {
   const worker = hlsProxyBase();
   if (!worker || !directUrl) return directUrl;
+  // Already proxied?
+  if (String(directUrl).indexOf(worker) === 0) return directUrl;
   const low = String(directUrl).toLowerCase();
-  if (!/\.(m3u8|m3u)(\?|$)/i.test(low) && !/(surrit|sixyik|nineyu|fourhoi)\.com/i.test(low)) {
-    return directUrl;
-  }
+  const isCdn =
+    /\.(m3u8|m3u)(\?|$)/i.test(low) ||
+    /(surrit|sixyik|nineyu|fourhoi)\.com/i.test(low);
+  if (!isCdn) return directUrl;
   const ref = pageUrl || baseUrl() + "/";
   let orig = baseUrl();
   try {
@@ -62,30 +71,53 @@ function maybeProxyUrl(directUrl, pageUrl) {
   u.searchParams.set("url", directUrl);
   u.searchParams.set("ref", ref);
   u.searchParams.set("orig", orig);
+  if (cookie) {
+    // encodeURIComponent keeps it safe in the query string
+    try {
+      u.searchParams.set("ck", cookie);
+    } catch (_) {}
+  }
   return u.toString();
 }
 
 function proxyStream(stream, pageUrl) {
   if (!stream || !stream.url) return stream;
-  const proxied = maybeProxyUrl(stream.url, pageUrl || stream.headers && stream.headers.Referer);
-  if (proxied === stream.url) return stream;
-  const out = Object.assign({}, stream, {
-    url: proxied,
-    label: (stream.label ? stream.label + " · proxy" : "HLS proxy"),
-  });
-  // Headers are applied by the worker; avoid double-sending conflicting ones
-  if (out.headers) {
-    const h = Object.assign({}, out.headers);
-    // Keep UA optional; worker sets its own
-    out.headers = h;
+  const worker = hlsProxyBase();
+  if (!worker) {
+    log("proxy OFF (hlsProxy vacío — configura el Worker en Ajustes)");
+    return stream;
   }
+  const cookie = extractCookie(stream.headers);
+  const page = pageUrl || (stream.headers && stream.headers.Referer) || baseUrl() + "/";
+  const proxied = maybeProxyUrl(stream.url, page, cookie);
+  if (proxied === stream.url) {
+    log("proxy: URL no es CDN, se deja directa", String(stream.url).slice(0, 80));
+    return stream;
+  }
+  log("proxy ON", proxied.slice(0, 100), "cookie?", !!cookie);
+  const out = {
+    url: proxied,
+    mime: stream.mime || "application/x-mpegURL",
+    label: stream.label ? stream.label + " · proxy" : "HLS proxy",
+  };
+  // Player talks to our Worker only; Worker sends Cookie/Referer upstream.
+  // Keep a minimal UA; do not send the original Cookie to the worker host.
+  out.headers = {
+    "User-Agent":
+      (stream.headers && (stream.headers["User-Agent"] || stream.headers["user-agent"])) ||
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    Accept: "*/*",
+  };
   if (Array.isArray(stream.alternatives) && stream.alternatives.length) {
     out.alternatives = stream.alternatives.map(function (a) {
       if (!a || !a.url) return a;
-      return Object.assign({}, a, {
-        url: maybeProxyUrl(a.url, pageUrl || (a.headers && a.headers.Referer)),
-        label: a.label ? a.label + " · proxy" : undefined,
-      });
+      const ck = extractCookie(a.headers) || cookie;
+      return {
+        url: maybeProxyUrl(a.url, page, ck),
+        label: a.label ? a.label + " · proxy" : "alt · proxy",
+        mime: a.mime || "application/x-mpegURL",
+        headers: out.headers,
+      };
     });
   }
   return out;

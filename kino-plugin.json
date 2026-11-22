@@ -1,10 +1,10 @@
 {
   "id": "missav",
   "name": "MissAV",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "apiVersion": 6,
   "entry": "plugin.js",
-  "description": "JAV de MissAV. Solo +18. HLS + navegador oculto. En Android TV surrit puede dar 403: usa el ajuste Proxy HLS con tu Worker.",
+  "description": "JAV de MissAV. Solo +18. En Android TV usa Proxy HLS (Worker) con cookies para evitar 403 de surrit.",
   "author": "Hotaru Yume",
   "creator": "hotaruyume",
   "homepage": "https://github.com/protaxiogenao-oss/kino-plugin-missaavicco-main",
