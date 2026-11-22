@@ -1,10 +1,10 @@
 {
   "id": "missav",
   "name": "MissAV",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "apiVersion": 6,
   "entry": "plugin.js",
-  "description": "JAV de MissAV. Solo +18. Rutas tipo CloudStream; navegador oculto + HLS. En Android TV (p.ej. Xiaomi) surrit.com puede dar 403: configura el ajuste «Proxy HLS» con un Cloudflare Worker (estilo CineJoy) para reenviar Referer.",
+  "description": "JAV de MissAV. Solo +18. HLS + navegador oculto. En Android TV surrit puede dar 403: usa el ajuste Proxy HLS con tu Worker.",
   "author": "Hotaru Yume",
   "creator": "hotaruyume",
   "homepage": "https://github.com/protaxiogenao-oss/kino-plugin-missaavicco-main",
@@ -120,9 +120,8 @@
     {
       "key": "hlsProxy",
       "label": "Proxy HLS (Android TV)",
-      "type": "text",
-      "default": "",
-      "hint": "URL del Worker, p.ej. https://missav-hls.xxx.workers.dev — vacío = directo. Necesario si surrit da 403 en TV."
+      "type": "url",
+      "hint": "https://missav-hls.xxx.workers.dev (vacío = directo)"
     }
   ],
   "browser": true
