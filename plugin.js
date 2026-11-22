@@ -1,5 +1,5 @@
-// Kino plugin: MissAV — v1.4.0 (CloudStream paths + getAndUnpack UUID)
-// apiVersion 6. Mirrors configurable (missav.ai / .ws / .live / .re).
+// Kino plugin: MissAV — v1.5.0 (HLS proxy for Android TV 403 + CloudStream paths)
+// apiVersion 6. Mirrors configurable. Optional Cloudflare Worker proxy (CineJoy-style).
 
 function log(...args) {
   try {
@@ -20,10 +20,75 @@ function lang() {
   return "en";
 }
 
+
 function preferredQuality() {
   const q = String(kino.config.get("quality") || "hls").toLowerCase();
   if (q === "720" || q === "480" || q === "360") return q;
   return "hls";
+}
+
+/** Optional Cloudflare Worker base, e.g. https://missav-hls.tu-cuenta.workers.dev */
+function hlsProxyBase() {
+  const raw = String(kino.config.get("hlsProxy") || "").trim().replace(/\/+$/, "");
+  if (!raw) return "";
+  if (!/^https?:\/\//i.test(raw)) return "";
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== "https:" && u.protocol !== "http:") return "";
+    return u.origin;
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Wrap a direct CDN HLS URL through the worker so ExoPlayer (Android TV)
+ * never hits surrit/sixyik without Referer/Origin. Same shape as CineJoy worker:
+ *   {worker}/playlist.m3u8?url={encoded}&ref={page}&orig={origin}
+ */
+function maybeProxyUrl(directUrl, pageUrl) {
+  const worker = hlsProxyBase();
+  if (!worker || !directUrl) return directUrl;
+  const low = String(directUrl).toLowerCase();
+  if (!/\.(m3u8|m3u)(\?|$)/i.test(low) && !/(surrit|sixyik|nineyu|fourhoi)\.com/i.test(low)) {
+    return directUrl;
+  }
+  const ref = pageUrl || baseUrl() + "/";
+  let orig = baseUrl();
+  try {
+    orig = new URL(ref).origin;
+  } catch (_) {}
+  const u = new URL(worker + "/playlist.m3u8");
+  u.searchParams.set("url", directUrl);
+  u.searchParams.set("ref", ref);
+  u.searchParams.set("orig", orig);
+  return u.toString();
+}
+
+function proxyStream(stream, pageUrl) {
+  if (!stream || !stream.url) return stream;
+  const proxied = maybeProxyUrl(stream.url, pageUrl || stream.headers && stream.headers.Referer);
+  if (proxied === stream.url) return stream;
+  const out = Object.assign({}, stream, {
+    url: proxied,
+    label: (stream.label ? stream.label + " · proxy" : "HLS proxy"),
+  });
+  // Headers are applied by the worker; avoid double-sending conflicting ones
+  if (out.headers) {
+    const h = Object.assign({}, out.headers);
+    // Keep UA optional; worker sets its own
+    out.headers = h;
+  }
+  if (Array.isArray(stream.alternatives) && stream.alternatives.length) {
+    out.alternatives = stream.alternatives.map(function (a) {
+      if (!a || !a.url) return a;
+      return Object.assign({}, a, {
+        url: maybeProxyUrl(a.url, pageUrl || (a.headers && a.headers.Referer)),
+        label: a.label ? a.label + " · proxy" : undefined,
+      });
+    });
+  }
+  return out;
 }
 
 function cleanText(s) {
@@ -617,19 +682,19 @@ export async function resolve(ref) {
     addAlt(qualityVariant(playlist, q), q + "p");
   }
 
-  return {
+  return proxyStream({
     url: streamUrl,
     mime: "application/x-mpegURL",
     headers,
     label: pref === "hls" ? "HLS" : pref + "p",
     alternatives: alternatives.length ? alternatives : undefined,
-  };
+  }, finalUrl || base + "/");
 }
 
 /**
  * Open the MissAV watch page in the hidden WebView and capture the real
- * HLS request (URL + headers/cookies). This is the reliable path on Android TV
- * where plain Referer headers still get 403 from surrit.com.
+ * HLS request (URL + headers/cookies). Best effort on Android TV.
+ * If surrit still returns 403, configure the hlsProxy setting (Cloudflare Worker).
  */
 async function resolveViaBrowser(pageUrls) {
   if (!kino.browser || typeof kino.browser.capture !== "function") {
@@ -741,13 +806,13 @@ async function resolveViaBrowser(pageUrls) {
       const isHls =
         /\.m3u8/i.test(primary.url) || /mpegurl/i.test(primary.mime || "");
       log("browser OK", primary.url.slice(0, 90));
-      return {
+      return proxyStream({
         url: primary.url,
         mime: primary.mime || (isHls ? "application/x-mpegURL" : "video/mp4"),
         headers,
         label: "Browser HLS",
         alternatives: alternatives.length ? alternatives : undefined,
-      };
+      }, pageUrl);
     } catch (e) {
       lastErr = e;
       const code = e && e.code;
